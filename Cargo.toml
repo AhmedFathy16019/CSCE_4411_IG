@@ -3,9 +3,21 @@ name = "rust_networking_example"
 version = "0.1.0"
 edition = "2021"
 
+[dependencies]
+tokio = { version = "1", features = ["full"] }
+lazy_static = "1.4"
+
 [[bin]]
 name = "server"
 path = "src/server.rs"
+
+[[bin]]
+name = "server2"
+path = "src/server2.rs"
+
+[[bin]]
+name = "server3"
+path = "src/server3.rs"
 
 [[bin]]
 name = "client"

@@ -1,66 +1,91 @@
 use std::convert::TryInto;
-use std::net::UdpSocket;
+use std::net::SocketAddr;
+use std::sync::Arc;
 use std::thread;
+use tokio::net::UdpSocket;
 
-fn read_request(socket: &UdpSocket) -> (u8, i64, std::net::SocketAddr) {
-    let mut buffer = [0; 9];
+async fn read_request(socket: &UdpSocket) -> Result<(SocketAddr, Vec<u8>), Box<dyn std::error::Error>> {
+    let mut buffer = vec![0; 1024];
 
-    let (length, client_addr) = socket
+    let (length, sender_address) = socket
         .recv_from(&mut buffer)
-        .expect("Failed to receive data from client");
+        .await?;
+        // .expect("Failed to receive data from client");
 
-    let operation_flag = buffer[0];
-    let result = i64::from_be_bytes(
-        buffer[1..length]
-            .try_into()
-            .expect("Error converting bytes to number"),
-    );
-
-    (operation_flag, result, client_addr)
+    Ok((sender_address, buffer[0..length].to_vec()))
 }
 
-fn process_request(operation_flag: u8, number: i64) -> i64 {
+async fn send_response(socket: &UdpSocket, dest_addr: &SocketAddr, data: &Vec<u8>) -> Result<(), Box<dyn std::error::Error>>{
+    socket
+        .send_to(&data, dest_addr)
+        .await?;
+        // .expect(&format!("Failed to send response to {:?}", dest_addr.to_string()));
+    Ok(())
+}
+
+// fn process_request(server_addresses: &Vec<SocketAddr>, load: &i64, operation_flag: &u8, number: &i64) -> i64 {
+fn process_request(operation_flag: &u8, number: &i64) -> i64 {
     match operation_flag {
         0 => number.checked_add(1).unwrap_or(i64::MAX), // Increment with overflow handling
         1 => number.checked_sub(1).unwrap_or(i64::MIN), // Decrement with overflow handling
+        // 2 => {
+        //     init_election(server_addresses, load);
+        //     -1
+        // },
         _ => {
             eprintln!("Invalid operation flag received from client");
-            0
+            -2
         }
     }
 }
 
-fn send_response(socket: &UdpSocket, response: i64, client_addr: std::net::SocketAddr) {
-    let response_data = response.to_be_bytes();
-    socket
-        .send_to(&response_data, client_addr)
-        .expect("Error sending data to client");
+fn init_election(server_addresses: &Vec<SocketAddr>, load: &i64) {
+    // for &server_address in server_addresses {
+
+    // }
 }
 
-fn handle_client(socket: UdpSocket) {
+// async fn handle_client(server_addresses: &Vec<SocketAddr>, socket: UdpSocket) -> Result<(), Box<dyn std::error::Error>> {
+async fn handle_client(socket: &UdpSocket) -> Result<(), Box<dyn std::error::Error>> {
     loop {
-        let (operation_flag, number, client_addr) = read_request(&socket);
-        let new_result = process_request(operation_flag, number);
-        send_response(&socket, new_result, client_addr);
+        let (client_address, data) = read_request(&socket).await?;
+        let operation_flag = data[0];
+        let number = i64::from_be_bytes(data[1..].try_into().unwrap());
+        let new_result = process_request(&operation_flag, &number);
+        println!("Result is: {}", new_result);
+        send_response(&socket, &client_address, &new_result.to_be_bytes().to_vec()).await?;
     }
 }
 
-fn main() {
-    let socket = UdpSocket::bind("127.0.0.1:8082").expect("Failed to bind to UDP socket");
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let socket = UdpSocket::bind("127.0.0.1:8082").await?;
 
+    let socket = Arc::new(socket);
+    
     println!("Server listening on 127.0.0.1:8082...");
-
+    
     let num_threads = 4; // Number of threads to handle clients
-
+    
     for _ in 0..num_threads {
-        let socket_clone = socket.try_clone().expect("Failed to clone socket");
-        thread::spawn(move || {
-            handle_client(socket_clone);
+        let socket_clone =Arc::clone(&socket);
+        tokio::spawn(async move {
+            if let Err(err) = handle_client(&socket_clone).await {
+                eprintln!("Error in handle_client: {}", err);
+            }
         });
     }
+    
+
+    // for _ in 0..num_threads {
+    //     let cloned_socket = Arc::clone(&socket_clone);
+    //     tokio::spawn(handle_client(cloned_socket));
+    // } 
 
     // Block the main thread to keep the program running
     for _ in 0..num_threads {
         thread::park();
     }
+
+    Ok(())
 }
